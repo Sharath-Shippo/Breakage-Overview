@@ -1,0 +1,2013 @@
+SET TIMEZONE TO 'US/PACIFIC';
+DROP TABLE IF EXISTS console_query_variables;
+CREATE TEMP TABLE console_query_variables AS
+SELECT
+    -- Date filter for whole query --> What dates range are we looking to pull?
+    '2022-01-01 00:00:00'::timestamp AS query_start_timestamp_filter,
+    '2023-12-31 00:00:00'::timestamp AS query_end_timestamp_filter,
+    -- Date filter for source tables --> Given the above date range, what date ranges
+    -- on the source tables should we look through?
+    '2021-06-01 00:00:00'::timestamp AS source_tables_start_timestamp_filter,
+    '2023-12-31 00:00:00'::timestamp AS source_tables_end_timestamp_filter,
+    -16 AS fuzzymatchmin,     --DAYS
+    6 AS fuzzymatchmax       --MONTHS
+;
+
+DROP TABLE IF EXISTS invoice_detail;
+CREATE TEMP TABLE invoice_detail AS
+SELECT DISTINCT
+    -- Pulls together invoice item data along with payment status information from
+    -- Billing table and invoice table as there are 3 separate payment status fields
+    invi.transaction_id,
+    --invi.invoice_id,
+    ac.iso currency,approve_time,
+    sum(
+            CASE
+                WHEN invi.object_purpose = 'REFUND'
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN (-1 * invi.amount)
+                ELSE NULL
+                END
+        ) AS invrefund,
+    sum(
+            CASE
+                WHEN invi.object_purpose != 'REFUND'
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN invi.amount
+                ELSE NULL
+                END
+        ) AS invcharge,
+    sum(
+            CASE
+                WHEN invi.object_purpose = 'REFUND'
+                    AND inv.paid IS NOT NULL
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN (-1 * invi.amount)
+                ELSE NULL
+                END
+        ) AS invrefund_paid_inv,
+    sum(
+            CASE
+                WHEN invi.object_purpose != 'REFUND'
+                    AND inv.paid IS NOT NULL
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN invi.amount
+                ELSE NULL
+                END
+        ) AS invcharge_paid_inv,
+    sum(
+            CASE
+                WHEN invi.object_purpose = 'REFUND'
+                    AND inv.status_id = 5 -- indicates fully paid
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN (-1 * invi.amount)
+                ELSE NULL
+                END
+        ) AS invrefund_paid_inv_status,
+    sum(
+            CASE
+                WHEN invi.object_purpose != 'REFUND'
+                    AND inv.status_id = 5 -- indicates fully paid
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN invi.amount
+                ELSE NULL
+                END
+        ) AS invcharge_paid_inv_status,
+    sum(
+            CASE
+                WHEN invi.object_purpose = 'REFUND'
+                    AND bp.status_id = '2' -- indicates fully paid
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN (-1 * invi.amount)
+                ELSE NULL
+                END
+        ) AS invrefund_paid_bp,
+    sum(
+            CASE
+                WHEN invi.object_purpose != 'REFUND'
+                    AND bp.status_id = '2' -- indicates fully paid
+                    AND (
+                                 invi.amount != 0
+                             OR invi.amount IS NOT NULL
+                         ) THEN invi.amount
+                ELSE NULL
+                END
+        ) AS invcharge_paid_bp,
+    sum(CASE
+            WHEN invi.type_id = 1
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_payment_ref,
+    sum(CASE
+            WHEN invi.type_id = 1
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_payment,
+    sum(CASE
+            WHEN invi.type_id = 2
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_failure_ref,
+    sum(CASE
+            WHEN invi.type_id = 2
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_failure,
+    sum(CASE
+            WHEN invi.type_id = 3
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_surcharge_ref,
+    sum(CASE
+            WHEN invi.type_id = 3
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_surcharge,
+    sum(CASE
+            WHEN invi.type_id = 4
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_refund_ref,
+    sum(CASE
+            WHEN invi.type_id = 4
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_refund,
+    sum(CASE
+            WHEN invi.type_id = 5
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS rebate_ref,
+    sum(CASE
+            WHEN invi.type_id = 5
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS rebate,
+    sum(CASE
+            WHEN invi.type_id = 6
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS one_off_credit_ref,
+    sum(CASE
+            WHEN invi.type_id = 6
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS one_off_credit,
+    sum(CASE
+            WHEN invi.type_id = 7
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS legacy_charge_ref,
+    sum(CASE
+            WHEN invi.type_id = 7
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS legacy_charge,
+    sum(CASE
+            WHEN invi.type_id = 8
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS legacy_refund_ref,
+    sum(CASE
+            WHEN invi.type_id = 8
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS legacy_refund,
+    sum(CASE
+            WHEN invi.type_id = 9
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS track_fee_ref,
+    sum(CASE
+            WHEN invi.type_id = 9
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS track_fee,
+    sum(CASE
+            WHEN invi.type_id = 10
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS address_validation_fee_ref,
+    sum(CASE
+            WHEN invi.type_id = 10
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS address_validation_fee,
+    sum(CASE
+            WHEN invi.type_id = 11
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS branding_ref,
+    sum(CASE
+            WHEN invi.type_id = 11
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS branding,
+    sum(CASE
+            WHEN invi.type_id = 12
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS multi_user_login_ref,
+    sum(CASE
+            WHEN invi.type_id = 12
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS multi_user_login,
+    sum(CASE
+            WHEN invi.type_id = 13
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS insurance_fee_ref,
+    sum(CASE
+            WHEN invi.type_id = 13
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS insurance_fee,
+    sum(CASE
+            WHEN invi.type_id = 14
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_fee_ref,
+    sum(CASE
+            WHEN invi.type_id = 14
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_fee,
+    sum(CASE
+            WHEN invi.type_id = 15
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS subscription_plan_fee_ref,
+    sum(CASE
+            WHEN invi.type_id = 15
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS subscription_plan_fee,
+    sum(CASE
+            WHEN invi.type_id = 16
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS postage_price_ref,
+    sum(CASE
+            WHEN invi.type_id = 16
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS postage_price,
+    sum(CASE
+            WHEN invi.type_id = 17
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS promo_code_credit_ref,
+    sum(CASE
+            WHEN invi.type_id = 17
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS promo_code_credit,
+    sum(CASE
+            WHEN invi.type_id = 18
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_price_true_up_charge_ref,
+    sum(CASE
+            WHEN invi.type_id = 18
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_price_true_up_charge,
+    sum(CASE
+            WHEN invi.type_id = 19
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS label_price_true_up_refund_ref,
+    sum(CASE
+            WHEN invi.type_id = 19
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS label_price_true_up_refund,
+    sum(CASE
+            WHEN invi.type_id = 20
+                AND invi.object_purpose = 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN (-1 * invi.amount)
+            ELSE NULL
+        END
+        ) AS preauth_capture_ref,
+    sum(CASE
+            WHEN invi.type_id = 20
+                AND invi.object_purpose != 'REFUND'
+                AND (invi.amount != 0 OR invi.amount IS NOT NULL)
+                THEN invi.amount
+            ELSE NULL
+        END
+        ) AS preauth_capture,
+    MAX(
+            CASE
+                WHEN invi.amount != 0
+                    OR invi.amount IS NOT NULL THEN invi.object_created
+                ELSE NULL
+                END
+        ) AS last_inv_date,
+    MIN(
+            CASE
+                WHEN invi.amount != 0
+                    OR invi.amount IS NOT NULL THEN invi.object_created
+                ELSE NULL
+                END
+        ) AS first_inv_date,
+    -- Below date was agreed upon for use in the stripe reconciliation by Terry Guan from the billing team and Stephen in Oct of 2022
+    MIN(
+            CASE
+                WHEN invi.amount != 0
+                    OR invi.amount IS NOT NULL THEN bp.initial_fully_paid_date
+                ELSE NULL
+                END
+        ) AS inv_to_merchant_date
+
+FROM audit_data_se01_20230823.api_invoiceitem invi
+         LEFT JOIN audit_data_se01_20230823.api_invoice inv ON invi.invoice_id = inv.id
+    AND (inv.object_created >= (select source_tables_start_timestamp_filter from console_query_variables)
+        AND inv.object_created < (select source_tables_end_timestamp_filter from console_query_variables))
+         LEFT JOIN
+     (SELECT
+          invoice_id,
+          min(object_created) initial_fully_paid_date,
+          status_id
+      FROM  audit_data_se01_20230823.billing_payment
+      WHERE status_id in ('2')
+      GROUP BY invoice_id, status_id
+     ) AS bp ON inv.id = bp.invoice_id
+         AND (bp.initial_fully_paid_date >= (select source_tables_start_timestamp_filter from console_query_variables)
+             AND bp.initial_fully_paid_date < (select source_tables_end_timestamp_filter from console_query_variables))
+         LEFT JOIN audit_data_se01_20230823.api_currency ac ON invi.currency_id = ac.id
+left join audit_data_se01_20230823.api_refund RF on invi.transaction_id=RF.transaction_id
+
+WHERE
+  --invi.object_created >= '2021-06-01'
+  --AND invi.object_created < '2022-04-01'
+    (invi.object_created >= (select source_tables_start_timestamp_filter from console_query_variables)
+        AND invi.object_created < (select source_tables_end_timestamp_filter from console_query_variables))
+  AND (
+            invi.amount != 0
+        OR invi.amount IS NOT NULL
+    )
+GROUP BY invi.transaction_id, ac.iso,approve_time;
+
+
+
+DROP TABLE IF EXISTS shipment_detail;
+CREATE TEMP TABLE shipment_detail AS
+SELECT DISTINCT
+    -- Pulls shipment information
+    shp.id,
+    shp.is_return,
+    shp.return_of_id,
+    shp.submission_type,
+
+    -- OUTBOUND OR RETURN
+
+
+    CASE
+        WHEN (shp.is_return is true OR shp.return_of_id IS NOT NULL) THEN 'return'
+        ELSE 'outbound'
+        END
+        AS            out_or_rtn
+FROM audit_data_se01_20230823.api_shipment shp
+WHERE (shp.object_created >= (select source_tables_start_timestamp_filter from console_query_variables)
+    AND shp.object_created < (select source_tables_end_timestamp_filter from console_query_variables));
+
+
+drop table iF exists Track_Detail;
+Create temp table Track_Detail as
+Select
+    transaction_id,
+    TR.carrier_dim_id,
+    carrier_name,
+    user_id,
+    first_event_date_dim_id as  First_Event_date,
+    last_event_date_dim_id as Last_Event_date,
+    first_scan_date_dim_id as First_Scan_date,
+    delivery_date_dim_id as Delivery_date,
+    actual_days_in_transit,
+    TR.track_status_dim_id,track_status_name
+from prod.track_fact TR
+         left join prod.track_status_dim TS on TR.track_status_dim_id=TS.track_status_dim_id
+         left join prod.carrier_dim CAD on TR.carrier_dim_id = CAD.carrier_dim_id
+left join prod.user_dim UD on TR.user_dim_id=UD.user_dim_id
+WHERE
+    (TR.create_date >= (select source_tables_start_timestamp_filter from console_query_variables)
+        AND TR.create_date < (select source_tables_end_timestamp_filter from console_query_variables))
+  AND (
+            cad.provider_id in ('10') or cad.carrier_name in ('UPS')
+        OR cad.provider_id in ('5') or cad.carrier_name in ('FedEx')
+        OR cad.provider_id in ('17') or cad.carrier_name in ('USPS')
+    );
+
+
+drop table iF exists UPS_FEDEX_Transactions;
+create table UPS_FEDEX_Transactions as
+SELECT
+    distinct lf.transaction_id,
+             lf.invoice_id,
+
+-- Amount Fields
+             lf.postage_est_cost_usd                 est_postage_cost,
+             lf.postage_cost_usd                     actual_postage_cost,
+             -- Postage price usd = rate.amount (user rate)
+             lf.postage_price_usd                    user_rate,
+             -- Missin invoice charge, invoice refund (replicatd with case statements below)
+             -- Missing insurance amount
+             -- Per Calvin 20220401, the fee merchant pays for insurance
+             lf.insurance_price_usd                  insurance_fee,
+             -- Per Calvin, the cost Shippo pays insurer
+             lf.insurance_cost_usd                   insurance_cost,
+             -- Missing all recon table fields (only in prod)
+             -- <<REDSHIFT SPECIFIC FIELDS BELOW>>
+             lf.invoiced_amount_usd                  inv_amount,
+             lf.invoiced_paid_usd                    inv_paid,
+-- Attribute Fields
+             --zd.zone_name,
+             -- Missing txn object state
+             -- Missing txn object status
+             lf.tracking_number,
+             emd.entry_method_type,
+             -- Missing scan form id
+             ptd.is_return,
+             -- Missing return of id
+             -- Missing submission id
+             mtd.manifest_type,
+             -- Missing ship submission type
+             sld.service_level_name,
+             -- Note cad.provider_id is broken per Calvin must use cd. only
+             cd.provider_id,
+             cd.carrier_name,
+             cad.master_carrier_account_id,
+             cad.carrier_account_id,
+             cad.master_carrier_ext_account_id,
+             rsd.refund_status                       shippo_refund,
+             crsd.carrier_refund_status,
+             -- <<REDSHIFT SPECIFIC FIELDS BELOW>>
+             cad.carrier_own_account_indicator,
+             ud.company_name,
+             ptd.parcel_type,
+             ttd.transaction_type,
+             rtd.refund_type,
+             lf.orig_transaction_id,
+             lf.reconcile_subgrp_ext_id,
+             --user_dim_id as user_id,
+             --lf.invoice_id,
+
+
+-- Transaction Type (need to determine inv chrg/ refund)
+             CASE
+                 WHEN (rsd.refund_status IS NOT NULL OR ttd.transaction_type = 'Refund') AND ptd.parcel_type = 'return' THEN 'return/refund'
+                 WHEN (rsd.refund_status IS NOT NULL OR ttd.transaction_type = 'Refund') THEN 'outbound/refund'
+                 WHEN ptd.parcel_type = 'return' THEN 'return'
+                 ELSE 'outbound'
+                 END                              AS cust_transaction_type,
+
+-- Determine 'Subscription w/o label' or show Transaction Type
+             CASE
+                 WHEN ttd.transaction_type = 'Dummy Label' THEN 'Subscription w/o Label'
+                 ELSE ttd.transaction_type
+                 END                              AS trx_type,
+
+
+-- Date fields
+             --to_char(pdd.full_date, 'YYYY-MM-DD') AS purchase_date,
+             to_char(pdd.full_date, 'MON-YY')     AS purchase_date_mon,
+             to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as purchase_date,
+             to_date(approve_time, 'YYYY-MM-DD',FALSE) as refund_date,
+             --INV.Refund_date as Refund_date,
+             First_Event_date,
+             Last_Event_date,
+             First_Scan_date,
+             Delivery_date,
+             actual_days_in_transit,carrier_service_level_name,ud.user_id,
+             track_status_dim_id,track_status_name,first_inv_date,approve_time as refund
+
+
+-- Main LABEL FACT (LF) TABLE
+FROM prod.label_fact lf
+
+-- JOINS
+         LEFT JOIN prod.carrier_account_dim cad ON lf.carrier_account_dim_id = cad.carrier_account_dim_id
+         LEFT JOIN prod.carrier_dim cd ON lf.carrier_dim_id = cd.carrier_dim_id
+         LEFT JOIN prod.parcel_type_dim ptd ON lf.parcel_type_dim_id = ptd.parcel_type_dim_id
+         LEFT JOIN prod.date_dim pdd ON lf.purchase_date_dim_id = pdd.date_dim_id
+         LEFT JOIN prod.service_level_dim sld ON lf.service_level_dim_id = sld.service_level_dim_id
+         LEFT JOIN prod.user_dim ud ON lf.user_dim_id = ud.user_dim_id
+         LEFT JOIN prod.transaction_type_dim ttd ON lf.transaction_type_dim_id = ttd.transaction_type_dim_id
+         LEFT JOIN prod.entry_method_dim emd ON lf.entry_method_dim_id = emd.entry_method_dim_id
+         LEFT JOIN prod.manifest_type_dim mtd ON lf.manifest_type_dim_id = mtd.manifest_type_dim_id
+         LEFT JOIN prod.carrier_refund_status_dim crsd ON lf.carrier_refund_status_dim_id = crsd.carrier_refund_status_dim_id
+         LEFT JOIN prod.refund_type_dim rtd ON lf.refund_type_dim_id = rtd.refund_type_dim_id
+         LEFT JOIN prod.refund_status_dim rsd ON lf.refund_status_dim_id = rsd.refund_status_dim_id
+         left join Track_Detail TR on lf.transaction_id=TR.transaction_id
+         left join (Select distinct transaction_id,approve_time,first_inv_date from invoice_detail) INV on lf.transaction_id=INV.transaction_id
+WHERE lf.purchase_date_dim_id >= '20220101'
+  --(select query_start_timestamp_filter from console_query_variables)
+  AND lf.purchase_date_dim_id <= '20231231'
+  -- (select query_end_timestamp_filter from console_query_variables)
+  AND (
+            cad.provider_id in ('10') or cad.carrier_name in ('UPS')
+        OR cad.provider_id in ('5') or cad.carrier_name in ('FedEx')
+        OR cad.provider_id in ('17') or cad.carrier_name in ('USPS'))
+  AND (ud.company_name NOT ILIKE ('%goshippo.com%')
+    AND ud.company_name NOT ILIKE ('%Popout%')
+    AND ud.company_name NOT ILIKE ('Shippo%'))
+
+-- Type Specific CASE SENSITIVE
+  AND ttd.transaction_type NOT IN ('Surcharge')
+ORDER BY lf.transaction_id;
+
+
+--Carriers +Activity Buckets--
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'NOT_IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Purchase'
+        and track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                  --'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+      and parcel_type='outbound'
+      --and transaction_id='169309238'
+      order by user_rate DESC)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'NOT_IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      refund_date,
+                      case when date_diff('DAY',purchase_date,refund_date)>=0 and date_diff('DAY',purchase_date,refund_date)<=30
+                          and  last_event_date<>'0' then 'less than 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)>30 and last_event_date<>'0' then 'After 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,refund_date) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Refund'
+        and track_status_name not  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested') -- Comment them
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+
+      --and transaction_id='169309238'
+      order by user_rate)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,service_level_name,reconcile_subgrp_ext_id
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Purchase'
+        and track_status_name  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+      --and transaction_id='169309238'
+      order by user_rate)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,refund_date)>=0 and date_diff('DAY',purchase_date,refund_date)<=30
+                          and  last_event_date<>'0' then 'less than 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)>30 and last_event_date<>'0' then 'After 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,refund_date) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,service_level_name, reconcile_subgrp_ext_id
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Refund'
+        and track_status_name  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+      --and transaction_id='169309238'
+      order by user_rate)
+group by 1,2,3,4,5,6;
+
+
+
+---Transaction having ext_id as null
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'NOT_IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Purchase'
+        and track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                  'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and carrier_name in ('FedEx')
+        and  reconcile_subgrp_ext_id is not null
+      order by user_rate DESC)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'NOT_IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      refund_date,
+                      case when date_diff('DAY',purchase_date,refund_date)>=0 and date_diff('DAY',purchase_date,refund_date)<=30
+                          and  last_event_date<>'0' then 'less than 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)>30 and last_event_date<>'0' then 'After 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,refund_date) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Refund'
+        and track_status_name not  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested') -- Comment them
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and carrier_name in ('FedEx')
+        and  reconcile_subgrp_ext_id is not null
+      --and transaction_id='169309238'
+      order by user_rate)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,service_level_name,reconcile_subgrp_ext_id
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Purchase'
+        and track_status_name  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+      --and transaction_id='169309238'
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and carrier_name in ('FedEx')
+        and  reconcile_subgrp_ext_id is not null
+      order by user_rate)
+group by 1,2,3,4,5,6
+union
+Select distinct carrier_name,purchase_date_mon,Delivery_Bucket,transaction_type,'IN_DELIVERED_RETURNED' as track_status,service_level_name,count(distinct reconcile_subgrp_ext_id),
+                count(distinct transaction_id),sum(user_rate) as user_rate,sum(-1* actual_postage_cost) as actual_postage_cost,sum(insurance_fee) as insurance_cost
+from (select distinct carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,transaction_id,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,refund_date)>=0 and date_diff('DAY',purchase_date,refund_date)<=30
+                          and  last_event_date<>'0' then 'less than 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)>30 and last_event_date<>'0' then 'After 30 Days'
+                           when  date_diff('DAY',purchase_date,refund_date)<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,refund_date) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,service_level_name, reconcile_subgrp_ext_id
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where transaction_type='Refund'
+        and track_status_name  in ('DELIVERED','RETURNED')
+        and parcel_type='outbound'
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                  'Managed 3rd Party Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+
+                                            AND provider_id in ('17','10','5'))
+      --and transaction_id='169309238'
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and carrier_name in ('FedEx')
+        and  reconcile_subgrp_ext_id is not null
+      order by user_rate)
+group by 1,2,3,4,5,6;
+
+
+
+--Company Level---
+---Unused Outbound Labels by Top 10 Users by User_ID  [All Carriers] (Overwhelming Majority is USPS)
+with Company_info as (
+    Select distinct user_id,sum(transactions) from
+    (select distinct user_id,count(distinct transaction_id) as transactions from  UPS_FEDEX_Transactions
+    where track_status_name  in ('DELIVERED')
+      and parcel_type='outbound' and transaction_type='Purchase'
+      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                --'Managed 3rd Party Master Account',
+                                                                                'Shippo FC Master Account',
+                                                                                'Shippo Master Account')
+
+                                          AND provider_id in ('17','10','5'))
+    and company_name not like ('gmail.com-%')
+    and company_name not like ('gmail.com')
+      and carrier_name in ('USPS','UPS') and user_id is not null
+    and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+    group by 1)
+         group by 1
+    order by sum(transactions) DESC limit 10),
+
+ Company_Details as (
+    select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                sum(insurance_fee) as TOTAL_insurance_cost,
+                count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+         --track_status_name not in ('NOT SET') and track_status_name is not null
+    where  parcel_type='outbound' and transaction_type='Purchase'
+      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                --'Managed 3rd Party Master Account',
+                                                                                'Shippo FC Master Account',
+                                                                                'Shippo Master Account')
+
+                                          AND provider_id in ('17','10','5'))
+    and user_id in (Select distinct user_id from Company_info)
+      and company_name not like ('gmail.com-%')
+      and company_name not like ('gmail.com')
+      and carrier_name in ('UPS','USPS')
+      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+group by 1,2,3,4
+union
+    select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                    sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                    sum(insurance_fee) as TOTAL_insurance_cost,
+                    count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+
+    where parcel_type='outbound' and transaction_type='Refund'
+      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                --'Managed 3rd Party Master Account',
+                                                                                'Shippo FC Master Account',
+                                                                                'Shippo Master Account')
+
+                                          AND provider_id in ('17','10','5'))
+    and user_id in (Select distinct user_id from Company_info)
+      and company_name not like ('gmail.com-%')
+      and company_name not like ('gmail.com')
+        and carrier_name in ('UPS','USPS')
+      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+    group by 1,2,3,4),
+
+
+Company_No_Activity as (
+Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                count(distinct transaction_id) as NO_ACTIVITY_transactions
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where  track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN (--'Managed 3rd Party Master Account',
+                                                                                  'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Purchase'
+        and user_id in (Select distinct user_id from Company_info)
+        and company_name not like ('gmail.com-%')
+        and company_name not like ('gmail.com')
+        and carrier_name in ('UPS','USPS')
+        and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+      )
+group by 1,2,3,4
+union
+Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+       sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+       sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+       count(distinct transaction_id) as NO_ACTIVITY_transactions
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where  track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN (--'Managed 3rd Party Master Account',
+                                                                                  'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Refund'
+        --and  company_name in (Select distinct company_name from Company_info)
+        and user_id in (Select distinct user_id from Company_info)
+        and company_name not like ('gmail.com-%')
+        and company_name not like ('gmail.com')
+        and carrier_name in ('UPS','USPS')
+        and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+     )
+group by 1,2,3,4)
+
+
+Select CD.company_name,CD.purchase_date_mon,CD.transaction_type,CD.carrier_name,
+       sum(TOTAL_USER_RATE)TOTAL_USER_RATE,
+       sum(TOTAL_Postage_Cost)TOTAL_Postage_Cost,
+       sum(TOTAL_insurance_cost)TOTAL_insurance_cost,
+       sum(TOTAL_transactions)TOTAL_transactions,
+       sum(NO_ACTIVITY_USER_RATE)NO_ACTIVITY_USER_RATE,
+       sum(NO_ACTIVITY_Postage_Cost)NO_ACTIVITY_Postage_Cost,
+       sum(NO_ACTIVITY_insurance_cost)NO_ACTIVITY_insurance_cost,
+       sum(NO_ACTIVITY_transactions)NO_ACTIVITY_transactions
+
+from Company_Details CD
+left join Company_No_Activity CN
+    on CD.company_name=CN.company_name
+           and CD.purchase_date_mon=CN.purchase_date_mon
+           and CD.carrier_name=CN.carrier_name
+           and CD.transaction_type=CN.transaction_type
+group by 1,2,3,4;
+
+
+--Unused Outbound Labels by Top 10 Users by User_ID [UPS] (Based on UPS carrier volume only)
+with Company_info as (
+    Select distinct user_id,sum(transactions) from
+        (select distinct user_id,count(distinct transaction_id) as transactions from  UPS_FEDEX_Transactions
+         where track_status_name  in ('DELIVERED')
+           and parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS') and user_id is not null
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1)
+    group by 1
+    order by sum(transactions) DESC limit 15),
+
+     Company_Details as (
+         select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+         --track_status_name not in ('NOT SET') and track_status_name is not null
+         where  parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4
+         union
+         select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+
+         where parcel_type='outbound' and transaction_type='Refund'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4),
+
+
+     Company_No_Activity as (
+         Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Purchase'
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4
+         union
+         Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Refund'
+                 --and  company_name in (Select distinct company_name from Company_info)
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4)
+
+
+Select CD.company_name,CD.purchase_date_mon,CD.transaction_type,CD.carrier_name,
+       sum(TOTAL_USER_RATE)TOTAL_USER_RATE,
+       sum(TOTAL_Postage_Cost)TOTAL_Postage_Cost,
+       sum(TOTAL_insurance_cost)TOTAL_insurance_cost,
+       sum(TOTAL_transactions)TOTAL_transactions,
+       sum(NO_ACTIVITY_USER_RATE)NO_ACTIVITY_USER_RATE,
+       sum(NO_ACTIVITY_Postage_Cost)NO_ACTIVITY_Postage_Cost,
+       sum(NO_ACTIVITY_insurance_cost)NO_ACTIVITY_insurance_cost,
+       sum(NO_ACTIVITY_transactions)NO_ACTIVITY_transactions
+
+from Company_Details CD
+         left join Company_No_Activity CN
+                   on CD.company_name=CN.company_name
+                       and CD.purchase_date_mon=CN.purchase_date_mon
+                       and CD.carrier_name=CN.carrier_name
+                       and CD.transaction_type=CN.transaction_type
+group by 1,2,3,4;
+
+
+--Users by User_ID who have 500-1500 Outbound UPS labels and 500+ USPS labels per month
+with Company_info as (
+    Select distinct user_id,sum(transactions) from
+        (select distinct user_id,count(distinct transaction_id) as transactions from  UPS_FEDEX_Transactions
+         where track_status_name  in ('DELIVERED')
+           and parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS') and user_id is not null
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1)
+    group by 1
+    order by sum(transactions) DESC limit 15),
+
+     Company_Details as (
+         select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+         --track_status_name not in ('NOT SET') and track_status_name is not null
+         where  parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4
+         union
+         select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+
+         where parcel_type='outbound' and transaction_type='Refund'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4),
+
+
+     Company_No_Activity as (
+         Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Purchase'
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4
+         union
+         Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Refund'
+                 --and  company_name in (Select distinct company_name from Company_info)
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4)
+
+
+Select CD.company_name,CD.purchase_date_mon,CD.transaction_type,CD.carrier_name,
+       sum(TOTAL_USER_RATE)TOTAL_USER_RATE,
+       sum(TOTAL_Postage_Cost)TOTAL_Postage_Cost,
+       sum(TOTAL_insurance_cost)TOTAL_insurance_cost,
+       sum(TOTAL_transactions)TOTAL_transactions,
+       sum(NO_ACTIVITY_USER_RATE)NO_ACTIVITY_USER_RATE,
+       sum(NO_ACTIVITY_Postage_Cost)NO_ACTIVITY_Postage_Cost,
+       sum(NO_ACTIVITY_insurance_cost)NO_ACTIVITY_insurance_cost,
+       sum(NO_ACTIVITY_transactions)NO_ACTIVITY_transactions
+
+from Company_Details CD
+         left join Company_No_Activity CN
+                   on CD.company_name=CN.company_name
+                       and CD.purchase_date_mon=CN.purchase_date_mon
+                       and CD.carrier_name=CN.carrier_name
+                       and CD.transaction_type=CN.transaction_type
+group by 1,2,3,4;
+
+
+
+--workload.co-9516---
+Select distinct user_id from
+(select distinct UPS_FEDEX.tracking_number,
+                Company_name,
+                service_level_name,
+                track_status_name,
+                Case when UPS_FEDEX.user_rate=(-1*R.user_rate) then UPS_FEDEX.user_rate+R.user_rate else UPS_FEDEX.user_rate end as total_Amount,
+                case when R.tracking_number is not null then 'YES' else 'NO' end as Refund_status,
+                -1*UPS_FEDEX.actual_postage_cost,
+                purchase_date,user_id,
+                UPS_FEDEX.transaction_id
+from UPS_FEDEX_Transactions UPS_FEDEX
+         LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+         left join (Select distinct transaction_id,user_id from track_detail) TD on UPS_FEDEX.transaction_id=TD.transaction_id
+         left join (select distinct tracking_number,user_rate
+                    from UPS_FEDEX_Transactions UPS_FEDEX
+                             LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+                             left join (Select distinct transaction_id,user_id from track_detail) TD on UPS_FEDEX.transaction_id=TD.transaction_id
+                    where  track_status_name not in ('DELIVERED','RETURNED')
+                      --and manifest_type in ('Not Needed','Manifested')
+                      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                        where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                                'Express Save Master Account',
+                                                                                                'Shippo FC Master Account',
+                                                                                                'Shippo Master Account')
+                                                          AND provider_id in ('17','10','5'))
+                      and parcel_type='outbound' and purchase_date is not null and First_Scan_date='0' and last_event_date='0' and transaction_type='Refund'
+                      and company_name='workload.co-9516'
+                      and company_name not like ('gmail.com-%')
+                      and company_name not like ('gmail.com')
+                      and carrier_name in ('UPS')
+                      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')) R on UPS_FEDEX.tracking_number=R.tracking_number
+where  track_status_name not in ('DELIVERED','RETURNED')
+  --and manifest_type in ('Not Needed','Manifested')
+  and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                    where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                            'Express Save Master Account',
+                                                                            'Shippo FC Master Account',
+                                                                            'Shippo Master Account')
+                                      AND provider_id in ('17','10','5'))
+  and parcel_type='outbound' and purchase_date is not null and First_Scan_date='0' and last_event_date='0' and transaction_type='Purchase'
+  and company_name='workload.co-9516'
+  and company_name not like ('gmail.com-%')
+  and company_name not like ('gmail.com')
+  and carrier_name in ('UPS')
+  and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23'))
+
+
+
+
+--Pull 10 users that have between 500-1500 UPS labels/mo and also 500+ USPS labels/mo in H1 2023
+--If there are not 10 users that match the above, then pull 10 UPS users with UPS labels between 500-1500/mo and 10 users with USPS labels between 500-1500/mo
+
+with Labels_Per_Month as (
+--Users by User_ID who have 500-1500 Outbound UPS labels and 500+ USPS labels per month
+select 'Months_aggregate' as Type,user_id
+from
+(select distinct user_id,count(distinct purchase_date_mon) as Months_aggregate from
+(select distinct user_id,purchase_date_mon,
+                     count(distinct transaction_id) as transactions,
+                     count(distinct (case when carrier_name='USPS' then transaction_id  end)) as USPS_transactions,
+                count(distinct (case when carrier_name='UPS' then transaction_id  end)) as UPS_transactions
+
+     from  UPS_FEDEX_Transactions
+     where track_status_name  in ('DELIVERED')
+       and parcel_type='outbound' and transaction_type='Purchase'
+       and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                         where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                 'Managed 3rd Party Master Account',
+                                                                                 'Shippo FC Master Account',
+                                                                                 'Shippo Master Account')
+
+                                           AND provider_id in ('17','10','5'))
+       and company_name not like ('gmail.com-%')
+       and company_name not like ('gmail.com')
+       and company_name not like ('yahoo.com-%')
+       and carrier_name in ('USPS','UPS')
+       --and company_name='VampireFreaks'
+       and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+     group by 1,2
+    Having UPS_transactions>=500 and UPS_transactions<=1500 and USPS_transactions>=500)
+group by 1
+having Months_aggregate=6)
+union
+--User by User_id who have  500+  Outbound USPS labels per month
+select 'USPS_TOP10' as Type,user_id
+from
+    (select distinct user_id,count(distinct purchase_date_mon) as Months_aggregate,sum(USPS_transactions) as total_USPS_transactions from
+        (select distinct user_id,purchase_date_mon,
+                         count(distinct transaction_id) as transactions,
+                         count(distinct (case when carrier_name='USPS' then transaction_id  end)) as USPS_transactions,
+                         count(distinct (case when carrier_name='UPS' then transaction_id  end)) as UPS_transactions
+
+         from  UPS_FEDEX_Transactions
+         where track_status_name  in ('DELIVERED')
+           and parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and company_name not like ('gmail.com-%')
+             and company_name not like ('yahoo.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('USPS')
+           --and company_name='VampireFreaks'
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2
+         Having USPS_transactions>=500 and USPS_transactions<=1500 order by USPS_transactions DESC)
+     group by 1
+     having Months_aggregate=6 order by total_USPS_transactions DESC limit 10)
+union
+---User by User_id who have  500+ Outbound  UPS labels per month
+select 'UPS_TOP10' as Type,user_id
+from
+    (select distinct user_id,count(distinct purchase_date_mon) as Months_aggregate,sum(UPS_transactions) as total_UPS_transactions from
+        (select distinct user_id,purchase_date_mon,
+                         count(distinct transaction_id) as transactions,
+                         count(distinct (case when carrier_name='USPS' then transaction_id  end)) as USPS_transactions,
+                         count(distinct (case when carrier_name='UPS' then transaction_id  end)) as UPS_transactions
+
+         from  UPS_FEDEX_Transactions
+         where track_status_name  in ('DELIVERED')
+           and parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('yahoo.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           --and company_name='VampireFreaks'
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2
+         Having UPS_transactions>=500 and UPS_transactions<=1500 order by UPS_transactions DESC)
+     group by 1
+     having Months_aggregate=6 order by total_UPS_transactions DESC limit 10)
+     ),
+Company_Details as (
+    select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                sum(insurance_fee) as TOTAL_insurance_cost,
+                count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+         --track_status_name not in ('NOT SET') and track_status_name is not null
+    where  parcel_type='outbound' and transaction_type='Purchase'
+      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                'Managed 3rd Party Master Account',
+                                                                                'Shippo FC Master Account',
+                                                                                'Shippo Master Account')
+
+                                          AND provider_id in ('17','10','5'))
+    and user_id in (Select distinct user_id from Labels_Per_Month where type='UPS_TOP10')
+      and company_name not like ('gmail.com-%')
+      and company_name not like ('gmail.com')
+      and carrier_name in ('UPS')
+      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+group by 1,2,3,4
+union
+    select distinct company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                    sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                    sum(insurance_fee) as TOTAL_insurance_cost,
+                    count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+
+    where parcel_type='outbound' and transaction_type='Refund'
+      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                'Managed 3rd Party Master Account',
+                                                                                'Shippo FC Master Account',
+                                                                                'Shippo Master Account')
+
+                                          AND provider_id in ('17','10','5'))
+      and user_id in (Select distinct user_id from Labels_Per_Month where type='UPS_TOP10')
+      and company_name not like ('gmail.com-%')
+      and company_name not like ('gmail.com')
+      and carrier_name in ('UPS')
+      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+    group by 1,2,3,4),
+
+
+Company_No_Activity as (
+Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                count(distinct transaction_id) as NO_ACTIVITY_transactions
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where  track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                  'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Purchase'
+       and user_id in (Select distinct user_id from Labels_Per_Month where type='UPS_TOP10')
+        and company_name not like ('gmail.com-%')
+        and company_name not like ('gmail.com')
+        and carrier_name in ('UPS')
+        and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+      )
+group by 1,2,3,4
+union
+Select distinct Company_name,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+       sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+       sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+       count(distinct transaction_id) as NO_ACTIVITY_transactions
+from (select distinct transaction_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                      case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                          and  last_event_date<>'0' then 'less than 90 Days'
+                           when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                               and  last_event_date<>'0' then 'Between 90-270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                           when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                           when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                           when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                           when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                      date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                      actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+      from UPS_FEDEX_Transactions UPS_FEDEX
+               LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+      where  track_status_name not in ('DELIVERED','RETURNED')
+        --and manifest_type in ('Not Needed','Manifested')
+        and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                          where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                  'Express Save Master Account',
+                                                                                  'Shippo FC Master Account',
+                                                                                  'Shippo Master Account')
+                                            AND provider_id in ('17','10','5'))
+        and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Refund'
+        --and  company_name in (Select distinct company_name from Company_info)
+        and user_id in (Select distinct user_id from Labels_Per_Month where type='UPS_TOP10')
+        and company_name not like ('gmail.com-%')
+        and company_name not like ('gmail.com')
+        and carrier_name in ('UPS')
+        and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+     )
+group by 1,2,3,4)
+
+
+Select CD.company_name,CD.purchase_date_mon,CD.transaction_type,CD.carrier_name,
+       sum(TOTAL_USER_RATE)TOTAL_USER_RATE,
+       sum(TOTAL_Postage_Cost)TOTAL_Postage_Cost,
+       sum(TOTAL_insurance_cost)TOTAL_insurance_cost,
+       sum(TOTAL_transactions)TOTAL_transactions,
+       sum(NO_ACTIVITY_USER_RATE)NO_ACTIVITY_USER_RATE,
+       sum(NO_ACTIVITY_Postage_Cost)NO_ACTIVITY_Postage_Cost,
+       sum(NO_ACTIVITY_insurance_cost)NO_ACTIVITY_insurance_cost,
+       sum(NO_ACTIVITY_transactions)NO_ACTIVITY_transactions
+
+from Company_Details CD
+         left join Company_No_Activity CN
+                   on CD.company_name=CN.company_name
+                       and CD.purchase_date_mon=CN.purchase_date_mon
+                       and CD.carrier_name=CN.carrier_name
+                       and CD.transaction_type=CN.transaction_type
+group by 1,2,3,4;
+
+
+
+
+---Lisa P Curtsy---
+select distinct UPS_FEDEX.tracking_number,UPS_FEDEX.transaction_id,user_id,company_name,purchase_date_mon,transaction_type,carrier_name,
+                 UPS_FEDEX.actual_postage_cost*-1 as Postage_cost,R.Refund_date,UPS_FEDEX.purchase_date,service_level_name,track_status_name,
+                 NO_ACT.actual_postage_cost*-1 as NO_ACTIVITY_Cost,
+                case when R.tracking_number is not null then 'YES' else 'NO' end as Refund_status,
+                Case when UPS_FEDEX.actual_postage_cost*-1=(R.refund_cost) then UPS_FEDEX.actual_postage_cost+R.refund_cost else UPS_FEDEX.actual_postage_cost end as total_Amount,
+                insurance_fee as TOTAL_insurance_cost
+                  from UPS_FEDEX_Transactions UPS_FEDEX
+            left join (select distinct tracking_number,actual_postage_cost as refund_cost,Refund_date
+                       from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                           where  parcel_type='outbound' and transaction_type='Refund'
+  and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                    where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                            'Managed 3rd Party Master Account',
+                                                                            'Shippo FC Master Account',
+                                                                            'Shippo Master Account')
+
+                                      AND provider_id in ('17','10','5'))
+                             and user_id='184752'
+  and company_name not like ('gmail.com-%')
+  and company_name not like ('gmail.com')
+  and carrier_name in ('USPS','UPS')
+  and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23'))R on UPS_FEDEX.tracking_number=R.tracking_number
+            left join (select distinct tracking_number,actual_postage_cost
+                       from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                       where  parcel_type='outbound' and transaction_type='Purchase'
+                         and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                           where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                                   'Managed 3rd Party Master Account',
+                                                                                                   'Shippo FC Master Account',
+                                                                                                   'Shippo Master Account')
+
+                                                             AND provider_id in ('17','10','5'))
+                         and user_id='184752'
+                         and company_name not like ('gmail.com-%')
+                         and company_name not like ('gmail.com')
+                         and carrier_name in ('USPS','UPS')
+                         and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+                         and purchase_date is not null and First_Scan_date='0' and last_event_date='0')NO_ACT on UPS_FEDEX.tracking_number=NO_ACT.tracking_number
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+where  parcel_type='outbound' and transaction_type='Purchase'
+  and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                    where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                            'Managed 3rd Party Master Account',
+                                                                            'Shippo FC Master Account',
+                                                                            'Shippo Master Account')
+
+                                      AND provider_id in ('17','10','5'))
+  and user_id='184752'
+  and company_name not like ('gmail.com-%')
+  and company_name not like ('gmail.com')
+  and carrier_name in ('USPS','UPS')
+  and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23');
+
+
+---VampireFreaks---
+select distinct UPS_FEDEX.tracking_number,UPS_FEDEX.transaction_id,user_id,company_name,purchase_date_mon,transaction_type,carrier_name,
+                UPS_FEDEX.actual_postage_cost*-1 as Postage_cost,R.Refund_date,UPS_FEDEX.purchase_date,service_level_name,track_status_name,
+                NO_ACT.actual_postage_cost*-1 as NO_ACTIVITY_Cost,
+                case when R.tracking_number is not null then 'YES' else 'NO' end as Refund_status,
+                Case when UPS_FEDEX.actual_postage_cost*-1=(R.refund_cost) then UPS_FEDEX.actual_postage_cost+R.refund_cost else UPS_FEDEX.actual_postage_cost end as total_Amount,
+                insurance_fee as TOTAL_insurance_cost
+from UPS_FEDEX_Transactions UPS_FEDEX
+         left join (select distinct tracking_number,actual_postage_cost as refund_cost,Refund_date
+                    from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                    where  parcel_type='outbound' and transaction_type='Refund'
+                      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                                'Managed 3rd Party Master Account',
+                                                                                                'Shippo FC Master Account',
+                                                                                                'Shippo Master Account')
+
+                                                          AND provider_id in ('17','10','5'))
+                      and user_id='2125224'
+                      and company_name not like ('gmail.com-%')
+                      and company_name not like ('gmail.com')
+                      and carrier_name in ('UPS')
+                      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23'))R on UPS_FEDEX.tracking_number=R.tracking_number
+         left join (select distinct tracking_number,actual_postage_cost
+                    from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                    where  parcel_type='outbound' and transaction_type='Purchase'
+                      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                                'Managed 3rd Party Master Account',
+                                                                                                'Shippo FC Master Account',
+                                                                                                'Shippo Master Account')
+
+                                                          AND provider_id in ('17','10','5'))
+                      and user_id='2125224'
+                      and company_name not like ('gmail.com-%')
+                      and company_name not like ('gmail.com')
+                      and carrier_name in ('UPS')
+                      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+                      and purchase_date is not null and First_Scan_date='0' and last_event_date='0')NO_ACT on UPS_FEDEX.tracking_number=NO_ACT.tracking_number
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+where  parcel_type='outbound' and transaction_type='Purchase'
+  and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                    where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                            'Managed 3rd Party Master Account',
+                                                                            'Shippo FC Master Account',
+                                                                            'Shippo Master Account')
+
+                                      AND provider_id in ('17','10','5'))
+  and user_id='2125224'
+  and company_name not like ('gmail.com-%')
+  and company_name not like ('gmail.com')
+  and carrier_name in ('UPS') and First_Scan_date='0' and last_event_date='0'
+  and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23');
+
+--Svaha USA--
+select distinct UPS_FEDEX.tracking_number,UPS_FEDEX.transaction_id,user_id,company_name,purchase_date_mon,transaction_type,carrier_name,
+                UPS_FEDEX.actual_postage_cost*-1 as Postage_cost,R.Refund_date,UPS_FEDEX.purchase_date,service_level_name,track_status_name,invoice_id,
+                NO_ACT.actual_postage_cost*-1 as NO_ACTIVITY_Cost,
+                case when R.tracking_number is not null then 'YES' else 'NO' end as Refund_status,
+                Case when UPS_FEDEX.actual_postage_cost*-1=(R.refund_cost) then UPS_FEDEX.actual_postage_cost+R.refund_cost else UPS_FEDEX.actual_postage_cost end as total_Amount,
+                insurance_fee as TOTAL_insurance_cost
+from UPS_FEDEX_Transactions UPS_FEDEX
+         left join (select distinct tracking_number,actual_postage_cost as refund_cost,Refund_date
+                    from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                    where  parcel_type='outbound' and transaction_type='Refund'
+                      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                                'Managed 3rd Party Master Account',
+                                                                                                'Shippo FC Master Account',
+                                                                                                'Shippo Master Account')
+
+                                                          AND provider_id in ('17','10','5'))
+                      and user_id='1436838'
+                      and company_name not like ('gmail.com-%')
+                      and company_name not like ('gmail.com')
+                      and carrier_name in ('USPS')
+                      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23'))R on UPS_FEDEX.tracking_number=R.tracking_number
+         left join (select distinct tracking_number,actual_postage_cost
+                    from UPS_FEDEX_Transactions UPS_FEDEX
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+                    where  parcel_type='outbound' and transaction_type='Purchase'
+                      and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                        where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                                'Managed 3rd Party Master Account',
+                                                                                                'Shippo FC Master Account',
+                                                                                                'Shippo Master Account')
+
+                                                          AND provider_id in ('17','10','5'))
+                      and user_id='1436838'
+                      and company_name not like ('gmail.com-%')
+                      and company_name not like ('gmail.com')
+                      and carrier_name in ('USPS')
+                      and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+                      and purchase_date is not null and First_Scan_date='0' and last_event_date='0')NO_ACT on UPS_FEDEX.tracking_number=NO_ACT.tracking_number
+
+--track_status_name not in ('NOT SET') and track_status_name is not null
+where  parcel_type='outbound' and transaction_type='Purchase'
+  and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                    where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                            'Managed 3rd Party Master Account',
+                                                                            'Shippo FC Master Account',
+                                                                            'Shippo Master Account')
+
+                                      AND provider_id in ('17','10','5'))
+  and user_id='1436838'
+  and company_name not like ('gmail.com-%')
+  and company_name not like ('gmail.com')
+  and carrier_name in ('USPS') and First_Scan_date='0' and last_event_date='0'
+  and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23');
+
+
+--UPS customers in H1'2023--
+with Company_info as (
+    Select distinct user_id,sum(transactions) from
+        (select distinct user_id,company_name,count(distinct transaction_id) as transactions from  UPS_FEDEX_Transactions
+         where track_status_name  in ('DELIVERED')
+           and parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('gmail.com')
+           --and company_name not like ('yahoo.com-%')
+           and carrier_name in ('UPS') and user_id is not null
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2)
+    group by 1
+    order by sum(transactions) DESC),
+
+
+     Company_Details as (
+         select distinct company_name,user_id,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+         --track_status_name not in ('NOT SET') and track_status_name is not null
+         where  parcel_type='outbound' and transaction_type='Purchase'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('yahoo.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4,5
+         union
+         select distinct company_name,user_id,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) TOTAL_USER_RATE,
+                         sum(actual_postage_cost) as TOTAL_Postage_Cost,
+                         sum(insurance_fee) as TOTAL_insurance_cost,
+                         count(distinct transaction_id) as TOTAL_transactions from UPS_FEDEX_Transactions
+
+
+         where parcel_type='outbound' and transaction_type='Refund'
+           and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                             where carrier_own_account_indicator IN ('Express Save Master Account',
+                                                                                     'Managed 3rd Party Master Account',
+                                                                                     'Shippo FC Master Account',
+                                                                                     'Shippo Master Account')
+
+                                               AND provider_id in ('17','10','5'))
+           and user_id in (Select distinct user_id from Company_info)
+           and company_name not like ('gmail.com-%')
+           and company_name not like ('yahoo.com-%')
+           and company_name not like ('gmail.com')
+           and carrier_name in ('UPS')
+           and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+         group by 1,2,3,4,5),
+
+
+     Company_No_Activity as (
+         Select distinct Company_name,user_id,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,user_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Purchase'
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('yahoo.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4,5
+         union
+         Select distinct Company_name,user_id,purchase_date_mon,transaction_type,carrier_name,sum(user_rate) as NO_ACTIVITY_USER_RATE,
+                         sum(actual_postage_cost) as NO_ACTIVITY_Postage_Cost,
+                         sum(insurance_fee) as NO_ACTIVITY_insurance_cost,
+                         count(distinct transaction_id) as NO_ACTIVITY_transactions
+         from (select distinct transaction_id,user_id,carrier_name,purchase_date_mon,purchase_date,First_Event_date,First_Scan_date,last_event_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE) as full_date,tracking_number,Delivery_date,track_status_name,transaction_type,
+                               case when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>0 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=90
+                                   and  last_event_date<>'0' then 'less than 90 Days'
+                                    when date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>90 and date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<=270
+                                        and  last_event_date<>'0' then 'Between 90-270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))>270 and last_event_date<>'0' then 'After  270 Days'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))<0 and last_event_date<>'0'   then 'Before purchase'
+                                    when  date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE))=0 and last_event_date<>'0' then 'Same Day Active'
+                                    when  purchase_date is not null and First_Scan_date='0' and last_event_date='0'  then 'No Activity'
+                                    when last_event_date<>'0' and last_event_date>Delivery_date then 'In Transit and Delivered Late'
+                                    when  last_event_date<>'0' and last_event_date<=Delivery_date then 'In Transit and Delivered As Expected' else 'Unknown' end as Delivery_Bucket,
+                               date_diff('DAY',purchase_date,to_date(pdd.full_date, 'YYYY-MM-DD',FALSE)) as Days_Diff,
+                               actual_postage_cost,user_rate,insurance_fee,reconcile_subgrp_ext_id,service_level_name,Company_name
+               from UPS_FEDEX_Transactions UPS_FEDEX
+                        LEFT JOIN prod.date_dim pdd ON (case when UPS_FEDEX.last_event_date='0' then '20231114' else UPS_FEDEX.last_event_date end) = pdd.date_dim_id
+               where  track_status_name not in ('DELIVERED','RETURNED')
+                 --and manifest_type in ('Not Needed','Manifested')
+                 and master_carrier_account_id in (select distinct master_carrier_account_id from prod.carrier_account_dim
+                                                   where carrier_own_account_indicator IN ('Managed 3rd Party Master Account',
+                                                                                           'Express Save Master Account',
+                                                                                           'Shippo FC Master Account',
+                                                                                           'Shippo Master Account')
+                                                     AND provider_id in ('17','10','5'))
+                 and parcel_type='outbound' and Delivery_Bucket='No Activity' and transaction_type='Refund'
+                 --and  company_name in (Select distinct company_name from Company_info)
+                 and user_id in (Select distinct user_id from Company_info)
+                 and company_name not like ('gmail.com-%')
+                 and company_name not like ('yahoo.com-%')
+                 and company_name not like ('gmail.com')
+                 and carrier_name in ('UPS')
+                 and purchase_date_mon in ('JAN-23','FEB-23','MAR-23','APR-23','MAY-23','JUN-23')
+              )
+         group by 1,2,3,4,5)
+
+
+Select CD.company_name,CD.user_id,CD.purchase_date_mon,CD.transaction_type,CD.carrier_name,
+       sum(TOTAL_USER_RATE)TOTAL_USER_RATE,
+       sum(TOTAL_Postage_Cost)TOTAL_Postage_Cost,
+       sum(TOTAL_insurance_cost)TOTAL_insurance_cost,
+       sum(TOTAL_transactions)TOTAL_transactions,
+       sum(NO_ACTIVITY_USER_RATE)NO_ACTIVITY_USER_RATE,
+       sum(NO_ACTIVITY_Postage_Cost)NO_ACTIVITY_Postage_Cost,
+       sum(NO_ACTIVITY_insurance_cost)NO_ACTIVITY_insurance_cost,
+       sum(NO_ACTIVITY_transactions)NO_ACTIVITY_transactions
+
+from Company_Details CD
+         left join Company_No_Activity CN
+                   on CD.company_name=CN.company_name
+                        and CD.user_id=CN.user_id
+                       and CD.purchase_date_mon=CN.purchase_date_mon
+                       and CD.carrier_name=CN.carrier_name
+                       and CD.transaction_type=CN.transaction_type
+group by 1,2,3,4,5;
